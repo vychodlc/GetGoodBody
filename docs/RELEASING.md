@@ -62,6 +62,10 @@ footer that `base64 -d` will reject — use Git Bash or WSL for the command abov
 
 ## Releasing
 
+Branch layout and version numbering are in [BRANCHING.md](BRANCHING.md). In short:
+`develop` is where work lands, `master` is what is released, and a merge into `master` is what
+builds the APK below.
+
 A release is a tag, and the tag has to agree with the version in the packages:
 
 ```sh

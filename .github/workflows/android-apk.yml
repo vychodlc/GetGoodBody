@@ -1,13 +1,18 @@
 name: Android APK
 
-# Builds the phone app and leaves the APK in the run's artifacts. Runs on every push to
-# master and on pull requests, so a broken Android build is caught on the commit that broke
-# it rather than on release day.
+# The phone app is built twice over, for two different reasons:
 #
-# The release itself (tag -> GitHub Release with the APK attached) is `android-release.yml`.
-# This workflow is the build; that one is the publish. Keeping them apart means a contributor
-# on a fork gets a buildable APK without ever needing the signing key, and the key is only
-# reachable from a tag.
+#   push to master  -> a full APK as a run artifact. This is the "what is on master
+#                      right now" build, and what a merge is expected to produce.
+#   pull_request    -> a fast check that the branch still assembles, with no signing
+#                      and no media bundled. A pull request that cannot build should
+#                      be found before it is merged, not after.
+#
+# `develop` pushes deliberately build nothing: it is the integration branch and moves
+# many times a day. Nothing reaches an APK until it is merged into master.
+#
+# The release itself (tag -> GitHub Release with the signed APK attached) is
+# `android-release.yml`. This workflow is the build; that one is the publish.
 on:
   push:
     branches: [master]
@@ -15,6 +20,7 @@ on:
       - 'website/**'
       - '**/*.md'
   pull_request:
+    branches: [master]
     paths-ignore:
       - 'website/**'
       - '**/*.md'
@@ -32,7 +38,32 @@ env:
   GRADLE_OPTS: -Dorg.gradle.daemon=false
 
 jobs:
+  # Anything that can fail without a working Android toolchain fails here in about a
+  # minute, rather than after the four-minute build below.
+  deps:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      # The mobile bundle with no media staged: enough to prove the VITE_MOBILE flavour
+      # compiles and that the Capacitor shell still accepts the result.
+      - run: VITE_MOBILE=1 npx vite build
+        working-directory: frontend
+      - run: npx cap sync android
+        working-directory: frontend
+      - run: node scripts/check-mobile-bundle.mjs
+        working-directory: frontend
+
   apk:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -97,10 +128,9 @@ jobs:
       # app-release-unsigned.apk and the SDK's own tools align and sign it. Reading the keystore
       # from a secret keeps it out of build.gradle, which is checked in.
       #
-      # The key is absent on a pull request from a fork (GitHub does not hand secrets to those),
-      # so the fallback is an unsigned APK rather than a red build — but that APK cannot be
-      # installed, which is why it is named `-unsigned` and why the release workflow refuses to
-      # publish without a key.
+      # Without the key this still succeeds, and names the file `-unsigned` so nobody mistakes it
+      # for something installable — an unsigned APK installs on nothing. The release workflow is
+      # the one that insists on a key.
       - name: Align and sign
         id: sign
         working-directory: frontend/android
