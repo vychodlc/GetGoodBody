@@ -118,8 +118,9 @@ describe('saved workout state sync and restore', () => {
     await useStore.getState().pullState()
 
     expect(useStore.getState().S.routines.map(r => r.id)).toEqual(['remote'])
+    // 远程没带的字段留在 DEF 的默认值上（本版默认：浅色 · 蓝色 · 简体中文）
     expect(useStore.getState().S.restSec).toBe(90)
-    expect(useStore.getState().S.lang).toBe('en')
+    expect(useStore.getState().S.lang).toBe('zh')
   })
 
   it('keeps the local saved state when the restore request fails', async () => {

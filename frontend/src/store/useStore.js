@@ -85,7 +85,7 @@ const gainedWorkoutMedia = (prev, next) => {
   return workoutMediaHashes(next).some(h => !had.has(h))
 }
 export const DEF = {
-  unit: 'kg', restSec: 90, restPauseSec: 15, sound: true, soundOnSilent: false, vibrateOnSilent: false, timerFlash: false, timedSetOvertime: false, keepAwake: true, lang: 'en',
+  unit: 'kg', restSec: 90, restPauseSec: 15, sound: true, soundOnSilent: false, vibrateOnSilent: false, timerFlash: false, timedSetOvertime: false, keepAwake: true, lang: 'zh',
   theme: 'light', accent: 'sky', body: 'male', targetW: null,
   bodyweight: [], routines: [], week: {}, dayPlan: {},
   // A note per day off (#261): { [iso]: { tag, text, _ts } } (lib/day-notes.js). A noted day is
@@ -241,15 +241,22 @@ export const DEF = {
 const clone = o => JSON.parse(JSON.stringify(o))
 
 // First run on a device whose language renders right-to-left starts in that language
-// rather than English; the boot script in index.html mirrors this check for the
+// rather than the fallback; the boot script in index.html mirrors this check for the
 // pre-paint direction. The choice is persisted like any other setting once the user
 // picks a language.
+//
+// The fallback is Chinese, not English: this build ships Chinese-first, so a device in
+// any other language still opens in Chinese. Note this runs for a fresh copy and for a
+// saved one that carries no `lang` (loadState below), and it decides the language a
+// brand-new profile starts in on every platform — including the phone app, which has no
+// instance config to read DEFAULT_LANG from. Anything more than "is it RTL" is the app's
+// own business (lib/default-lang.js matchLocale), which runs once the state is in hand.
 const detectedLang = () => {
   try {
     const base = (navigator.language || '').toLowerCase().split('-')[0]
     if (RTL_LANGS.has(base)) return base
   } catch (e) { /* ignore */ }
-  return 'en'
+  return 'zh'
 }
 
 // A copy started from nothing on this device. `langAuto` marks its language as one nobody has

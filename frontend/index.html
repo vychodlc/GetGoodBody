@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
@@ -11,11 +11,17 @@
   // The theme is set here too, and for the same reason: :root is the dark palette, so a copy
   // that opens in light would paint one dark frame before React mounts. The rule mirrors
   // resolveTheme in App.jsx — 'system' follows the OS, anything else is the copy's own.
+  //
+  // The language falls back to Chinese, not English: this build ships Chinese-first. Arabic is
+  // still honoured because the text direction has to be right in the first frame. Only the base
+  // subtag is read — matchLocale in the app owns the full mapping (zh-TW/zh-HK → zh-TW).
   try {
     var s = JSON.parse(localStorage.getItem('gym_state_v1') || '{}');
-    var l = s.lang || ((navigator.language || '').slice(0, 2) === 'ar' ? 'ar' : 'en');
+    var nav = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+    var rtl = String(nav[0] || '').toLowerCase().split('-')[0] === 'ar';
+    var l = s.lang || (rtl ? 'ar' : 'zh');
     document.documentElement.lang = l;
-    document.documentElement.dir = l === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.dir = rtl ? 'rtl' : 'ltr';
     var t = s.theme;
     if (t !== 'light' && t !== 'dark') t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     document.documentElement.dataset.theme = t;
