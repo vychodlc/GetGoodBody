@@ -2,7 +2,7 @@
   "appId": "ch.duartesantos.opengym",
   "appName": "GetGoodBody",
   "webDir": "dist",
-  "backgroundColor": "#0c0e12",
+  "backgroundColor": "#f2f2f7",
   "android": {
     "allowMixedContent": true
   }

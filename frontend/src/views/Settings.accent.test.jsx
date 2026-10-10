@@ -171,7 +171,8 @@ describe('Settings: your own accent colour', () => {
   it('ignores a value that is not a colour', () => {
     mocks.S.accent = 'custom'; mocks.S.accentCustom = 'red;}'
     mount()
-    expect(host.querySelector('.lrow-v').textContent).toBe('Green')
+    // 不可用的自定义色 → 回落到当前默认强调色（accentKey），即 sky / Blue
+    expect(host.querySelector('.lrow-v').textContent).toBe('Blue')
     expect(own().classList.contains('unset')).toBe(true)
   })
 

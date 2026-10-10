@@ -22,6 +22,9 @@ const undo = () => useUI.getState().runToastAction()
 // The copy both devices share before anything happens.
 const shared = () => Object.assign(clone(DEF), {
   _ts: 1000,
+  // 显式偏离默认强调色：下面的用例要断言「换成另一个预设时选择权归它」，基线若恰好等于
+  // 那个预设，两边就撞成同一个值，测的就不再是合并规则了。
+  accent: 'lime',
   routines: [routine('a', 'Push', 900), routine('b', 'Pull', 900), routine('c', 'Legs', 900)],
   week: { 1: ['a', 'b'], 3: ['b'], 5: ['c'] },
 })
