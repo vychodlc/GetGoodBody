@@ -220,24 +220,39 @@ jobs:
           #    earlier run got past a keytool-based check and failed inside apksigner anyway. The
           #    check below reads the value through the environment, never through $( ), so nothing
           #    is silently stripped before it is inspected.
+          # b) the password must be printable ASCII with no leading or trailing space.
+          #
+          #    Why this is not paranoia: a password copied out of a file can carry a byte that
+          #    is not printable ASCII, and apksigner then reports
+          #      "failed to decrypt safe contents entry: Password is not ASCII"
+          #    from PKCS12KeyStore.engineLoad — i.e. *after* the keystore was read fine. The
+          #    message therefore reads as a corrupt keystore, which is exactly the wrong place
+          #    to look. A keytool -list check does not catch it either: keytool tolerates a
+          #    stray trailing byte that apksigner refuses.
+          #
+          #    The value goes in through the environment and is measured by byte count, never
+          #    through $( ) — command substitution strips trailing newlines before they can be
+          #    seen, which is the one thing being looked for.
           echo "::group::Checking the password bytes"
-          if ! printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -An -c \
-               | tr -s ' ' '\n' | grep -qvE '^([ -~]|\\n|\\r|\\t|)$'; then
-            :
-          fi
-          BAD_BYTES="$(printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -An -tu1 \
-                       | tr -s ' ' '\n' | grep -v '^$' | awk '$1 < 32 || $1 > 126' | tr '\n' ' ')"
-          if [ -n "$BAD_BYTES" ]; then
-            echo "FATAL: ANDROID_KEYSTORE_PASSWORD has bytes outside printable ASCII." >&2
-            echo "Byte values (decimal) that are not 32-126: $BAD_BYTES" >&2
-            echo "The secret as stored, byte by byte:" >&2
+          PW_BYTES="$(printf '%s' "$KEYSTORE_PASSWORD" | wc -c | tr -d ' ')"
+          PW_CLEAN_BYTES="$(printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C tr -d '\40-\176' | wc -c | tr -d ' ')"
+          echo "password: $PW_BYTES bytes, of which $PW_CLEAN_BYTES are outside printable ASCII"
+
+          if [ "$PW_CLEAN_BYTES" != "0" ]; then
+            echo "FATAL: ANDROID_KEYSTORE_PASSWORD contains $PW_CLEAN_BYTES byte(s) outside ASCII 32-126." >&2
+            echo "The secret as stored, byte by byte (od -c):" >&2
             printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -c | head -4 | sed 's/^/  /' >&2
+            echo "Decimal values of every byte:" >&2
+            printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -An -tu1 | tr -s ' ' | sed 's/^/  /' >&2
             echo >&2
-            echo "Usual cause: a trailing newline or a non-breaking space picked up while copying." >&2
-            echo "Re-paste it with:  printf '%s' \"\$(cat ~/getgoodbody-release.password.clean.txt)\" | pbcopy" >&2
+            echo "A trailing newline or a non-breaking space picked up while copying is the usual cause." >&2
+            echo "Re-paste with:  pbcopy < ~/getgoodbody-release.password.clean.txt" >&2
             exit 1
           fi
-          echo "password is ${#KEYSTORE_PASSWORD} ASCII characters, no surrounding whitespace"
+          case "$KEYSTORE_PASSWORD" in
+            " "*) echo "FATAL: the password starts with a space — a stray paste." >&2; exit 1 ;;
+            *" ") echo "FATAL: the password ends with a space — a stray paste." >&2; exit 1 ;;
+          esac
           echo "::endgroup::"
 
           # c) prove the password and alias open the keystore, using keytool from the same JDK
