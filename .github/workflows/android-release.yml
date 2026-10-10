@@ -142,7 +142,18 @@ jobs:
           npx cap sync android
           node scripts/check-mobile-bundle.mjs
 
-      - name: Assemble, align and sign
+      # assembleRelease is its own step so a Gradle failure is distinguishable from a signing
+      # failure. They were one step before, and "exit code 2" from a shell script that did five
+      # things told nobody which of the five broke.
+      - name: Assemble the release APK
+        working-directory: frontend/android
+        run: ./gradlew --no-daemon assembleRelease
+
+      # Everything here reports what it was working with before it fails. The first run of this
+      # workflow failed with nothing but "exit code 2" and no way to tell a corrupt secret from a
+      # bad password from a missing file, which cost a round trip through the UI to diagnose.
+      # A signing step should say which of those it hit.
+      - name: Align and sign
         working-directory: frontend/android
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -150,13 +161,65 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           set -eu
-          ./gradlew --no-daemon assembleRelease
+          echo "::group::What the secrets look like"
+          echo "KEYSTORE_B64 length:   ${#KEYSTORE_B64} characters"
+          echo "KEYSTORE_PASSWORD len: ${#KEYSTORE_PASSWORD} characters"
+          echo "KEY_ALIAS:             '${KEY_ALIAS}'"
+          echo "VERSION from GITHUB_ENV: '${VERSION:-<unset>}'"
+          echo "::endgroup::"
+
+          if [ -z "${VERSION:-}" ]; then
+            echo "FATAL: VERSION is unset — the 'Check the tag' step did not run or did not export it." >&2
+            exit 1
+          fi
+
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
+          if [ ! -f "$UNSIGNED" ]; then
+            echo "FATAL: $UNSIGNED was not produced by assembleRelease." >&2
+            ls -la app/build/outputs/apk/release/ 2>&1 || true
+            exit 1
+          fi
+          echo "unsigned APK: $(wc -c < "$UNSIGNED") bytes"
+
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          echo "build-tools:  $BT"
           mkdir -p ../../artifacts
 
+          # a) decode. A secret pasted through the web UI can arrive truncated, so report the
+          #    length and the decoded size rather than letting `base64 -d` fail obscurely.
+          echo "::group::Decoding the keystore"
           KS="$(mktemp)"
-          printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
+          if ! printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS" 2>&1; then
+            echo "FATAL: ANDROID_KEYSTORE_B64 is not valid base64." >&2
+            echo "Re-paste the secret from ~/getgoodbody-release.jks.b64 (single line)." >&2
+            exit 1
+          fi
+          DECODED="$(wc -c < "$KS")"
+          echo "decoded keystore: $DECODED bytes"
+          if [ "$DECODED" -lt 1000 ]; then
+            echo "FATAL: decoded keystore is only $DECODED bytes — a real PKCS#12 is ~2.7 KB." >&2
+            echo "The secret is almost certainly truncated. Re-paste it in full." >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # b) prove the password and alias open the keystore, using keytool from the same JDK
+          #    Gradle ran under. apksigner's own error for a bad password is easy to miss in a
+          #    long log; this says it plainly first.
+          echo "::group::Checking the password and alias"
+          if ! "$JAVA_HOME/bin/keytool" -J-Duser.language=en -list -keystore "$KS" \
+                 -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "FATAL: the keystore did not open with ANDROID_KEYSTORE_PASSWORD + alias '$KEY_ALIAS'." >&2
+            echo "Either the password secret is wrong, or the alias does not exist in the keystore." >&2
+            echo "Aliases actually present:" >&2
+            "$JAVA_HOME/bin/keytool" -J-Duser.language=en -list -keystore "$KS" \
+              -storepass:env KEYSTORE_PASSWORD 2>&1 | sed 's/^/  /' >&2 || echo "  (the password did not open it either)" >&2
+            exit 1
+          fi
+          echo "keystore opens with the alias '$KEY_ALIAS'"
+          echo "::endgroup::"
+
+          echo "::group::Signing"
           "$BT/zipalign" -f -p 4 "$UNSIGNED" aligned.apk
           "$BT/apksigner" sign \
             --ks "$KS" \
@@ -165,9 +228,12 @@ jobs:
             --key-pass "env:KEYSTORE_PASSWORD" \
             --out "../../artifacts/GetGoodBody-$VERSION.apk" aligned.apk
           rm -f "$KS" aligned.apk
+          echo "::endgroup::"
 
-          # A release shipped an unverified signature once would be invisible; say it out loud.
+          echo "::group::Verifying the signature"
           "$BT/apksigner" verify --print-certs "../../artifacts/GetGoodBody-$VERSION.apk"
+          echo "::endgroup::"
+
           cd ../../artifacts
           sha256sum "GetGoodBody-$VERSION.apk" > "GetGoodBody-$VERSION.apk.sha256"
           cat "GetGoodBody-$VERSION.apk.sha256"
