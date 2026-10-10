@@ -15,7 +15,9 @@ on:
       - 'api/coach/prompts/**'
       - '.github/workflows/test.yml'
   push:
-    branches: [main, coach]
+    # `master` is this fork's default branch (upstream releases from `main`); without it the
+    # suite that gates a release would never run on the branch the release is tagged from.
+    branches: [main, master, coach]
     paths:
       - 'frontend/**'
       - 'api/**'

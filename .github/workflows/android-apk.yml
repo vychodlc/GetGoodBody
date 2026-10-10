@@ -1,0 +1,153 @@
+name: Android APK
+
+# Builds the phone app and leaves the APK in the run's artifacts. Runs on every push to
+# master and on pull requests, so a broken Android build is caught on the commit that broke
+# it rather than on release day.
+#
+# The release itself (tag -> GitHub Release with the APK attached) is `android-release.yml`.
+# This workflow is the build; that one is the publish. Keeping them apart means a contributor
+# on a fork gets a buildable APK without ever needing the signing key, and the key is only
+# reachable from a tag.
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_USER_HOME: ${{ github.workspace }}/.gradle
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      # node:22-alpine in web/Dockerfile — CI matches production (see .github/workflows/test.yml).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Gradle 8.11.1 (frontend/android/gradle/wrapper) needs 17+; the wrapper's version is what
+      # matters, not this one. Temurin 21 is what the android/ build was verified against.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # compileSdk/targetSdk 35 (frontend/android/variables.gradle). build-tools is what
+      # zipalign and apksigner come from, so it is not optional.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            .gradle/wrapper
+            .gradle/caches
+          key: gradle-${{ runner.os }}-${{ hashFiles('frontend/android/**/*.gradle*', 'frontend/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - run: npm ci
+        working-directory: frontend
+
+      # The VITE_MOBILE bundle: it talks to no backend at all — no sign-in, no sync. The 180 px
+      # exercise media from catalogue/media are packed in (they are ordinary files in the repo,
+      # not symlinks or LFS, so a plain checkout has them).
+      - name: Build the mobile bundle
+        working-directory: frontend
+        run: |
+          set -eu
+          VITE_MOBILE=1 npx vite build
+          node ../scripts/catalogue/stage-media.mjs dist
+
+      # `cap sync android`, not the package.json `build:mobile` script: that one runs a bare
+      # `cap sync`, which syncs ios/ too and needs CocoaPods, which no Linux runner has.
+      - name: Sync into the Android project
+        working-directory: frontend
+        run: |
+          set -eu
+          npx cap sync android
+          node scripts/check-mobile-bundle.mjs
+
+      - name: Assemble the release APK
+        working-directory: frontend/android
+        run: ./gradlew --no-daemon assembleRelease
+
+      # Signing, the same way .gitlab-ci.yml does it: assembleRelease writes
+      # app-release-unsigned.apk and the SDK's own tools align and sign it. Reading the keystore
+      # from a secret keeps it out of build.gradle, which is checked in.
+      #
+      # The key is absent on a pull request from a fork (GitHub does not hand secrets to those),
+      # so the fallback is an unsigned APK rather than a red build — but that APK cannot be
+      # installed, which is why it is named `-unsigned` and why the release workflow refuses to
+      # publish without a key.
+      - name: Align and sign
+        id: sign
+        working-directory: frontend/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -eu
+          VERSION="$(node -p "require('../package.json').version")"
+          UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          mkdir -p ../../artifacts
+
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            KS="$(mktemp)"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
+            "$BT/zipalign" -f -p 4 "$UNSIGNED" aligned.apk
+            "$BT/apksigner" sign \
+              --ks "$KS" \
+              --ks-pass "env:KEYSTORE_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass "env:KEYSTORE_PASSWORD" \
+              --out "../../artifacts/GetGoodBody-$VERSION.apk" aligned.apk
+            rm -f "$KS" aligned.apk
+            "$BT/apksigner" verify --print-certs "../../artifacts/GetGoodBody-$VERSION.apk"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            "$BT/zipalign" -f -p 4 "$UNSIGNED" "../../artifacts/GetGoodBody-$VERSION-unsigned.apk"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANDROID_KEYSTORE_B64 is not set, so this APK is unsigned and cannot be installed. Set the signing secrets to get an installable build."
+          fi
+
+      # Sideloading means no app store checked this file, so publish the digest next to it.
+      - name: Write the checksum
+        working-directory: artifacts
+        run: |
+          set -eu
+          for apk in *.apk; do sha256sum "$apk" > "$apk.sha256"; cat "$apk.sha256"; done
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GetGoodBody-apk
+          path: |
+            artifacts/*.apk
+            artifacts/*.apk.sha256
+            artifacts/*.apk.idsig
+          if-no-files-found: error
+          retention-days: 30

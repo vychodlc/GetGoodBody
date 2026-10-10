@@ -1,0 +1,169 @@
+name: Release
+
+# `git tag v1.4.0 && git push origin v1.4.0` is the whole release. The tag is checked against
+# the package versions first, then the APK is built, signed and attached to a GitHub Release
+# together with its .sha256.
+#
+# Only a `v*` tag can reach this workflow, and that is deliberate: the signing key lives in a
+# repository secret, and a branch build has no business holding it. A fork that tags its own
+# version needs to add its own secrets — without them this fails on purpose rather than
+# shipping an APK nobody can install.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build and publish, e.g. v1.4.0'
+        required: true
+
+permissions:
+  contents: write    # create the Release and upload its assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GRADLE_USER_HOME: ${{ github.workspace }}/.gradle
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # A tag and the packages drifting apart is the one mistake a release cannot recover
+      # from — the APK would report a version its own download page disagrees with. Mirrors
+      # `release:preflight` in .gitlab-ci.yml.
+      - name: Check the tag against the package versions
+        run: |
+          set -eu
+          TAG="${{ inputs.tag || github.ref_name }}"
+          case "$TAG" in
+            v*) SEMVER="${TAG#v}" ;;
+            *) echo "FATAL: '$TAG' is not a v* tag." >&2; exit 1 ;;
+          esac
+          for pkg in frontend/package.json api/package.json; do
+            v="$(node -p "require('./$pkg').version")"
+            [ "$v" = "$SEMVER" ] || {
+              echo "FATAL: $TAG but $pkg says $v — bump it (or tag the bump commit) and re-tag." >&2
+              exit 1
+            }
+          done
+          echo "VERSION=$SEMVER" >> "$GITHUB_ENV"
+          echo "Tag $TAG matches frontend and api ($SEMVER)."
+
+      # A release must never quietly ship an APK nobody can install.
+      - name: Require the signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -eu
+          missing=''
+          [ -n "${KEYSTORE_B64:-}" ]      || missing="$missing ANDROID_KEYSTORE_B64"
+          [ -n "${KEYSTORE_PASSWORD:-}" ] || missing="$missing ANDROID_KEYSTORE_PASSWORD"
+          [ -n "${KEY_ALIAS:-}" ]         || missing="$missing ANDROID_KEY_ALIAS"
+          if [ -n "$missing" ]; then
+            {
+              echo "FATAL: this is a release, but the signing secrets are not set:$missing"
+              echo
+              echo "Add them under Settings -> Secrets and variables -> Actions. See"
+              echo "docs/RELEASING.md for how to make the keystore and encode it."
+              echo
+              echo "Refusing to publish an unsigned APK: it installs on nothing."
+            } >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            .gradle/wrapper
+            .gradle/caches
+          key: gradle-${{ runner.os }}-release-${{ hashFiles('frontend/android/**/*.gradle*', 'frontend/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - run: npm ci
+        working-directory: frontend
+
+      - name: Build the mobile bundle
+        working-directory: frontend
+        run: |
+          set -eu
+          VITE_MOBILE=1 npx vite build
+          node ../scripts/catalogue/stage-media.mjs dist
+
+      # `cap sync android` rather than the `build:mobile` script: a bare `cap sync` also syncs
+      # ios/, which wants CocoaPods and does not exist on a Linux runner.
+      - name: Sync into the Android project
+        working-directory: frontend
+        run: |
+          set -eu
+          npx cap sync android
+          node scripts/check-mobile-bundle.mjs
+
+      - name: Assemble, align and sign
+        working-directory: frontend/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -eu
+          ./gradlew --no-daemon assembleRelease
+          UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          mkdir -p ../../artifacts
+
+          KS="$(mktemp)"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
+          "$BT/zipalign" -f -p 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign \
+            --ks "$KS" \
+            --ks-pass "env:KEYSTORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "env:KEYSTORE_PASSWORD" \
+            --out "../../artifacts/GetGoodBody-$VERSION.apk" aligned.apk
+          rm -f "$KS" aligned.apk
+
+          # A release shipped an unverified signature once would be invisible; say it out loud.
+          "$BT/apksigner" verify --print-certs "../../artifacts/GetGoodBody-$VERSION.apk"
+          cd ../../artifacts
+          sha256sum "GetGoodBody-$VERSION.apk" > "GetGoodBody-$VERSION.apk.sha256"
+          cat "GetGoodBody-$VERSION.apk.sha256"
+
+      - name: Publish the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          TAG="${{ inputs.tag || github.ref_name }}"
+          gh release create "$TAG" \
+            --title "GetGoodBody $VERSION" \
+            --generate-notes \
+            artifacts/GetGoodBody-"$VERSION".apk \
+            artifacts/GetGoodBody-"$VERSION".apk.sha256 \
+            artifacts/GetGoodBody-"$VERSION".apk.idsig
