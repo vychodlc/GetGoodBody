@@ -33,21 +33,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # The checkout ref is left alone deliberately: `inputs` is not populated for a push event,
+      # so `inputs.tag || github.ref` would resolve to nothing on the very path this workflow
+      # exists for. On a tag push the event already checked out that tag, and on a manual run the
+      # tag is re-checked below, from a ref that does exist.
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
 
       # A tag and the packages drifting apart is the one mistake a release cannot recover
       # from — the APK would report a version its own download page disagrees with. Mirrors
       # `release:preflight` in .gitlab-ci.yml.
+      #
+      # Also settles on the tag, since the two ways in disagree about where it is: on a tag push
+      # it is `github.ref_name`; on a manual run the branch that triggered it is checked out and
+      # the tag comes from the input.
+      - name: Work out the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          TAG="${INPUT_TAG:-${GITHUB_REF_NAME:-}}"
+          case "$TAG" in
+            v*) ;;
+            *) echo "FATAL: '$TAG' is not a v* tag." >&2; exit 1 ;;
+          esac
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG."
+
       - name: Check the tag against the package versions
         run: |
           set -eu
-          TAG="${{ inputs.tag || github.ref_name }}"
-          case "$TAG" in
-            v*) SEMVER="${TAG#v}" ;;
-            *) echo "FATAL: '$TAG' is not a v* tag." >&2; exit 1 ;;
-          esac
+          SEMVER="${TAG#v}"
           for pkg in frontend/package.json api/package.json; do
             v="$(node -p "require('./$pkg').version")"
             [ "$v" = "$SEMVER" ] || {
@@ -160,7 +177,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG="${{ inputs.tag || github.ref_name }}"
+          # TAG comes from the "Work out the tag" step through GITHUB_ENV. It is not re-derived
+          # here: `inputs` is empty on a tag push, which is the normal path.
           gh release create "$TAG" \
             --title "GetGoodBody $VERSION" \
             --generate-notes \
