@@ -79,5 +79,32 @@ download page contradicts is the one mistake that cannot be taken back.
 carries upstream's tags (`v1.4.0` and earlier); pushing them would create Releases for versions
 this fork never built.
 
+Upstream had a `v1.0.0` of its own as well (July 2026, its first public release), and it sat in
+this clone's history, so the local tag had to be replaced rather than created. It still exists in
+the `upstream` remote — `git fetch --tags upstream` brings it back if you ever want to compare
+against it. `v1.0.0` on `origin` is this fork's, pointing at the merge commit below.
+
+## Cutting 1.0.0, as it actually went
+
+The order matters and is easy to get wrong:
+
+```sh
+git checkout -b develop                       # the integration branch
+# ...commit the version bump to 1.0.0...
+git push -u origin develop
+git checkout master && git merge --no-ff develop
+git push origin master                        # <- the APK build runs here
+git tag -a v1.0.0 -m "…"                      # tag the merge, not the develop commit
+git push origin v1.0.0                        # <- the Release runs here
+```
+
+The tag goes on the **merge commit**, so the Release and the APK build describe the same tree.
+Tagging the `develop` commit instead would publish an artifact built from a tree that never
+reached `master`.
+
+The first run of the Release workflow stops at "Require the signing key" until the three secrets
+exist — see [RELEASING.md](RELEASING.md). That is the intended failure, not a broken workflow: it
+refuses to publish an APK that installs on nothing.
+
 See [RELEASING.md](RELEASING.md) for the keystore, the signing secrets, and what the APK build
 does step by step.
