@@ -103,6 +103,9 @@ if base64 -i "$OUT" >/dev/null 2>&1; then
 else
   base64 -w0 "$OUT" > "$B64_FILE"                 # GNU coreutils
 fi
+# pbcopy with the file's own trailing newline would paste a newline into GitHub's
+# single-line secret field, where it becomes part of the value and the keystore then fails
+# with "Password is not ASCII". printf strips it.
 pbcopy < "$B64_FILE" 2>/dev/null || true
 
 cat <<EOF
