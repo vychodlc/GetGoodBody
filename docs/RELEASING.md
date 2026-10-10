@@ -24,14 +24,38 @@ device. That is the whole reason this has to be done once and then kept.
 ### 1. Make the keystore
 
 ```sh
-keytool -genkeypair \
-  -keystore getgoodbody.jks \
-  -alias getgoodbody \
-  -keyalg RSA -keysize 2048 -validity 10950
+scripts/make-android-keystore.sh
+```
+
+It creates `~/getgoodbody-release.jks` (30-year validity), writes
+`~/getgoodbody-release.jks.b64` next to it, copies the base64 to the clipboard, and prints the
+three secrets to paste. Run it **once**; it refuses to overwrite an existing keystore, because
+replacing one silently orphans every install already out there.
+
+Useful flags: pass a path as the first argument, `KEY_ALIAS` to change the alias, or
+`KEYSTORE_PASSWORD` to run unattended.
+
+Two things the script exists to avoid:
+
+- **`keytool` on macOS is usually a stub.** `/usr/bin/keytool` fails with *"Unable to locate a
+  Java Runtime"* unless a JDK is registered with `java_home`, even when a JDK is installed
+  somewhere else. The script finds the JDK this workspace uses for the Android build
+  (`~/android-tools/jdk/*/Contents/Home`) instead of trusting `PATH`.
+- **keytool localises its prompts and labels.** `-dname` is passed so it does not ask six
+  questions, and the output is forced to English so the summary is not silently empty on a
+  Chinese system.
+
+By hand, if you prefer — `-dname` replaces the interactive prompts:
+
+```sh
+~/android-tools/jdk/*/Contents/Home/bin/keytool -genkeypair \
+  -keystore getgoodbody-release.jks -alias getgoodbody \
+  -keyalg RSA -keysize 2048 -validity 10950 \
+  -dname "CN=GetGoodBody, OU=Android, O=GetGoodBody, C=CN"
 ```
 
 `-validity 10950` is 30 years — the Play Store's minimum is 25, and an expired key cannot sign.
-Answer the prompts; the `CN` is what shows in Android's install dialog.
+The `CN` is what shows in Android's install dialog.
 
 > **Back this file up somewhere you will still have in five years** (a password manager, an
 > encrypted backup). Losing it means every installed copy has to be uninstalled and reinstalled
@@ -39,26 +63,32 @@ Answer the prompts; the `CN` is what shows in Android's install dialog.
 
 ### 2. Add the three secrets
 
-Under **Settings → Secrets and variables → Actions → New repository secret**:
+Under **Settings → Secrets and variables → Actions → New repository secret**, or directly at
+`https://github.com/vychodlc/GetGoodBody/settings/secrets/actions`:
 
 | Secret | Value |
 |---|---|
-| `ANDROID_KEYSTORE_B64` | the keystore, base64-encoded (below) |
+| `ANDROID_KEYSTORE_B64` | the whole contents of `getgoodbody-release.jks.b64`, one line |
 | `ANDROID_KEYSTORE_PASSWORD` | the store password you chose |
-| `ANDROID_KEY_ALIAS` | the alias, `getgoodbody` above |
+| `ANDROID_KEY_ALIAS` | the alias — `getgoodbody` unless you changed it |
 
-Encode the keystore — one line, no wrapping, because the workflow decodes it with `base64 -d`:
+The base64 has to be a **single line**, because the workflow decodes it with `base64 -d`, which
+stops at the first newline. The script already writes it that way. To redo it by hand:
 
 ```sh
-# macOS
-base64 -i getgoodbody.jks | tr -d '\n' | pbcopy
-
-# Linux
-base64 -w0 getgoodbody.jks | xclip -selection clipboard
+base64 -i getgoodbody-release.jks | tr -d '\n' > getgoodbody-release.jks.b64   # macOS
+base64 -w0 getgoodbody-release.jks > getgoodbody-release.jks.b64               # Linux
 ```
 
-Paste that into `ANDROID_KEYSTORE_B64`. Windows users: `certutil -encode` writes a header and
-footer that `base64 -d` will reject — use Git Bash or WSL for the command above.
+Windows: `certutil -encode` writes a header and footer that `base64 -d` rejects — use Git Bash or
+WSL.
+
+> Keystores and their base64 forms are in `.gitignore` (`*.jks`, `*.b64`, …). Do not remove those
+> rules: a keystore committed once is in the history forever, and anything signed with a leaked
+> key is compromised.
+
+Once the secrets exist, re-run the failed Release — **Actions → Release → Run workflow** with
+tag `v1.0.0` — or push a new tag.
 
 ## Releasing
 
