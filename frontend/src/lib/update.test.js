@@ -145,7 +145,7 @@ describe('checkForUpdate', () => {
   const REAL_RELEASE = [
     {
       "tag_name": "v1.3.1",
-      "name": "openGym v1.3.1",
+      "name": "GetGoodBody v1.3.1",
       "assets": {
         "count": 7,
         "sources": [

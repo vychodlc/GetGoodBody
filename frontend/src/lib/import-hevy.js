@@ -332,7 +332,7 @@ export function parseHevyRoutines(routines, templates, { unit = 'kg', customEx =
 
   for (const r of routines || []) {
     const ex = []
-    const sgMap = new Map() // Hevy superset_id → openGym sg token
+    const sgMap = new Map() // Hevy superset_id → GetGoodBody sg token
 
     for (const he of r.exercises || []) {
       const id = R.resolve(he.exercise_template_id, he.title)

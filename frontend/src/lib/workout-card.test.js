@@ -98,7 +98,7 @@ describe('layoutWorkoutCard', () => {
   const kinds = (layout, kind) => layout.items.filter(i => i.kind === kind)
   const map = { aspect: 1280 / 727 }
 
-  it('stacks the title, date, stat tiles, records and the openGym footer, top to bottom', () => {
+  it('stacks the title, date, stat tiles, records and the GetGoodBody footer, top to bottom', () => {
     const layout = layoutWorkoutCard(model, { measure })
     expect(layout.width).toBe(CARD_WIDTH)
     expect(texts(layout)).toEqual(['Push', 'Thu, 3 Sep 2026', 'Duration', '58 min', 'Sets', '5', 'Volume', '1,790 kg', 'New personal records', 'Barbell Bench Press', 'openGym'])

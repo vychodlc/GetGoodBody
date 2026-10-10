@@ -72,7 +72,7 @@ describe('the FIT CRC', () => {
     expect(fitCrc(new TextEncoder().encode('123456789'))).toBe(0xBB3D)
     expect(fitCrc(new Uint8Array(0))).toBe(0)
     // It can be fed in pieces.
-    const bytes = new TextEncoder().encode('openGym .fit')
+    const bytes = new TextEncoder().encode('GetGoodBody .fit')
     expect(fitCrc(bytes.subarray(5), fitCrc(bytes.subarray(0, 5)))).toBe(fitCrc(bytes))
   })
 })
@@ -171,7 +171,7 @@ describe('a strength workout as FIT', () => {
   const sets = of(d, MSG.set)
   const active = sets.filter(s => s[5] === 1)
 
-  it('is a valid activity file from openGym', () => {
+  it('is a valid activity file from GetGoodBody', () => {
     expect(fitCrc(workoutFit(strength))).toBe(0)
     const [id] = of(d, MSG.fileId)
     expect(id[0]).toBe(4)                         // activity
