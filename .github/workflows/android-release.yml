@@ -203,9 +203,47 @@ jobs:
           fi
           echo "::endgroup::"
 
-          # b) prove the password and alias open the keystore, using keytool from the same JDK
-          #    Gradle ran under. apksigner's own error for a bad password is easy to miss in a
-          #    long log; this says it plainly first.
+          # b) the password must be plain ASCII with no leading or trailing whitespace.
+          #    This is not paranoia: copying a password file with `pbcopy < file` includes the
+          #    file's trailing newline, GitHub's single-line secret field keeps it, and apksigner
+          #    then fails with "failed to decrypt safe contents entry: Password is not ASCII"
+          #    while loadKeyStoreFromFile has already succeeded — so the error points at the
+          #    wrong thing. keytool -list does NOT catch this (it tolerates the newline), which
+          #    is how a run got past a keytool-based check and failed in apksigner anyway.
+          # b) the password must be plain ASCII with no leading or trailing whitespace.
+          #    This is not paranoia. A password copied out of a file can carry a byte that is not
+          #    printable ASCII, and apksigner then fails with "failed to decrypt safe contents
+          #    entry: Password is not ASCII" *after* loadKeyStoreFromFile has already succeeded —
+          #    so the error points at the keystore rather than the secret.
+          #
+          #    keytool -list does not catch this (it tolerates the extra byte), which is how an
+          #    earlier run got past a keytool-based check and failed inside apksigner anyway. The
+          #    check below reads the value through the environment, never through $( ), so nothing
+          #    is silently stripped before it is inspected.
+          echo "::group::Checking the password bytes"
+          if ! printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -An -c \
+               | tr -s ' ' '\n' | grep -qvE '^([ -~]|\\n|\\r|\\t|)$'; then
+            :
+          fi
+          BAD_BYTES="$(printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -An -tu1 \
+                       | tr -s ' ' '\n' | grep -v '^$' | awk '$1 < 32 || $1 > 126' | tr '\n' ' ')"
+          if [ -n "$BAD_BYTES" ]; then
+            echo "FATAL: ANDROID_KEYSTORE_PASSWORD has bytes outside printable ASCII." >&2
+            echo "Byte values (decimal) that are not 32-126: $BAD_BYTES" >&2
+            echo "The secret as stored, byte by byte:" >&2
+            printf '%s' "$KEYSTORE_PASSWORD" | LC_ALL=C od -c | head -4 | sed 's/^/  /' >&2
+            echo >&2
+            echo "Usual cause: a trailing newline or a non-breaking space picked up while copying." >&2
+            echo "Re-paste it with:  printf '%s' \"\$(cat ~/getgoodbody-release.password.clean.txt)\" | pbcopy" >&2
+            exit 1
+          fi
+          echo "password is ${#KEYSTORE_PASSWORD} ASCII characters, no surrounding whitespace"
+          echo "::endgroup::"
+
+          # c) prove the password and alias open the keystore, using keytool from the same JDK
+          #    Gradle ran under. Kept after the byte check, not instead of it: keytool says
+          #    whether the password is *right*, the byte check says whether it is *shaped right*,
+          #    and apksigner only accepts both.
           echo "::group::Checking the password and alias"
           if ! "$JAVA_HOME/bin/keytool" -J-Duser.language=en -list -keystore "$KS" \
                  -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" >/dev/null 2>&1; then
