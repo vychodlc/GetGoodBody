@@ -30,3 +30,17 @@ frontend/bundle-size.json
 
 # Local planning notes
 docs/superpowers/plans/
+
+# Android signing material — never commit these. A keystore in the history is a leaked private
+# key: it cannot be removed without rewriting the branch, and anything signed with it is
+# compromised. scripts/make-android-keystore.sh writes these into $HOME by default.
+*.jks
+*.keystore
+*.p12
+*.pepk
+keystore.properties
+# The base64 form of a keystore is the keystore. scripts/make-android-keystore.sh writes
+# $OUT.b64 next to it; both spellings are covered so an older one cannot slip in.
+*.b64
+*.jks.base64.txt
+*.keystore.base64.txt
