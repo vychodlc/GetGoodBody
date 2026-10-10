@@ -44,3 +44,12 @@ keystore.properties
 *.b64
 *.jks.base64.txt
 *.keystore.base64.txt
+# The store password scripts/make-android-keystore.sh writes next to the keystore.
+# It lives in $HOME by default, i.e. outside the repository — these rules are for the
+# case where someone points the script at a path inside a checkout.
+*.password.txt
+*.password.clean.txt
+getgoodbody-release.password*
+
+# Local signing tests (the CI jobs write here too; never committed)
+artifacts/
